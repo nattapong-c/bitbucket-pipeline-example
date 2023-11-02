@@ -1,0 +1,87 @@
+image: atlassian/default-image:4
+options:
+  docker: true
+definitions:
+  services:
+    docker:
+      memory: 1024
+  steps:
+    - step: &validate-node-caches
+        name: Validate node caches
+        script:
+          - pipe: atlassian/bitbucket-clear-cache:3.3.0
+            variables:
+              BITBUCKET_ACCESS_TOKEN: ${BITBUCKET_ACCESS_TOKEN}
+              CACHES: ['node']
+        condition:
+          changesets:
+            includePaths:
+              - package.json
+              - yarn.lock
+    - step: &check-update
+        name: Check update apps
+        size: 2x
+        caches:
+          - node
+        script:
+          - npm install -g yarn
+          - yarn install --frozen-lockfile
+          - yarn nx affected:build --prod --base=origin/${BITBUCKET_BRANCH}~1 --head=origin/${BITBUCKET_BRANCH}
+          # - yarn nx affected:build --prod --all
+        artifacts:
+          - dist/**
+    - step: &auth-app
+        name: Build auth-app
+        caches:
+          - node
+        script:
+          - npm install -g yarn
+          - bash ./pipeline/install-package.sh auth-app ${BITBUCKET_BRANCH}
+          - bash ./pipeline/build.sh auth-app ${BITBUCKET_BRANCH}
+        artifacts:
+          - version/**
+    - step: &survey-app
+        name: Build survey-app
+        caches:
+          - node
+        script:
+          - npm install -g yarn
+          - bash ./pipeline/install-package.sh survey-app ${BITBUCKET_BRANCH}
+          - bash ./pipeline/build.sh survey-app ${BITBUCKET_BRANCH}
+        artifacts:
+          - version/**
+    - step: &project-service
+        name: Build project-service
+        caches:
+          - node
+        script:
+          - bash ./pipeline/install-package.sh project-service ${BITBUCKET_BRANCH}
+          - bash ./pipeline/build.sh project-service ${BITBUCKET_BRANCH}
+        artifacts:
+          - version/**
+    - step: &krakend-service
+        name: Build krakend-service
+        script:
+          - bash ./pipeline/install-package.sh krakend-service ${BITBUCKET_BRANCH}
+          - bash ./pipeline/build-krakend.sh ${BITBUCKET_BRANCH}
+        artifacts:
+          - version/**
+        condition:
+          changesets:
+            includePaths:
+              - 'deployment/krakend/**'
+    - step: &notify
+        name: Notify Discord
+        script:
+          - bash ./pipeline/notify.sh ${BITBUCKET_BRANCH}
+pipelines:
+  branches:
+    '{release,main}':
+      - step: *validate-node-caches
+      - step: *check-update
+      - parallel:
+          - step: *auth-app
+          - step: *survey-app
+          - step: *project-service
+          - step: *krakend-service
+      - step: *notify
